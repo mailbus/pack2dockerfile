@@ -1,0 +1,25 @@
+{
+  "image_name": "mixed-app",
+  "local_info": {
+    "stack": "io.buildpacks.stacks.jammy",
+    "run_images": [
+      { "name": "index.docker.io/paketobuildpacks/run-jammy-full:latest" }
+    ],
+    "buildpacks": [
+      { "id": "paketo-buildpacks/node-engine", "version": "4.0.0" },
+      { "id": "paketo-buildpacks/cpython", "version": "2.0.0" }
+    ],
+    "processes": [
+      {
+        "type": "web",
+        "shell": "",
+        "command": "node",
+        "default": true,
+        "args": ["server.js"],
+        "working-dir": "/workspace"
+      }
+    ],
+    "rebasable": true
+  },
+  "remote_info": null
+}

@@ -1,0 +1,28 @@
+{
+  "image_name": "my-app",
+  "local_info": null,
+  "remote_info": {
+    "stack": "io.buildpacks.stacks.jammy",
+    "base_image": {
+      "top_layer": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "reference": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "run_images": [
+      { "name": "index.docker.io/paketobuildpacks/run-jammy-full:latest" }
+    ],
+    "buildpacks": [
+      { "id": "paketo-buildpacks/node-engine", "version": "4.0.0" }
+    ],
+    "processes": [
+      {
+        "type": "web",
+        "shell": "",
+        "command": "node",
+        "default": true,
+        "args": ["server.js"],
+        "working-dir": "/workspace"
+      }
+    ],
+    "rebasable": true
+  }
+}

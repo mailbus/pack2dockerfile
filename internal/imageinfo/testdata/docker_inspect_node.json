@@ -1,0 +1,17 @@
+[
+  {
+    "Id": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "Config": {
+      "User": "1002:1000",
+      "Env": [
+        "CNB_APP_DIR=/workspace",
+        "PATH=/cnb/process:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ],
+      "Labels": {
+        "io.buildpacks.build.metadata": "{\"processes\":[{\"type\":\"web\",\"command\":[\"node\",\"server.js\"],\"args\":[],\"direct\":true,\"working-dir\":\"/workspace\"}],\"buildpacks\":[{\"id\":\"paketo-buildpacks/node-engine\",\"version\":\"4.0.0\"}],\"launcher\":{\"version\":\"0.20.0\"}}",
+        "io.buildpacks.lifecycle.metadata": "{\"buildpacks\":[{\"key\":\"paketo-buildpacks/nodejs\",\"version\":\"2.0.0\",\"layers\":{}}],\"runImage\":{\"image\":\"index.docker.io/paketobuildpacks/run-jammy-full:latest\",\"mirrors\":[],\"topLayer\":\"sha256:1111\",\"reference\":\"sha256:2222\"}}",
+        "io.buildpacks.stack.id": "io.buildpacks.stacks.jammy"
+      }
+    }
+  }
+]

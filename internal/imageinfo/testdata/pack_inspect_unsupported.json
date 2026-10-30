@@ -1,0 +1,16 @@
+{
+  "image_name": "utility-app",
+  "local_info": {
+    "stack": "io.buildpacks.stacks.jammy",
+    "run_images": [
+      { "name": "index.docker.io/paketobuildpacks/run-jammy-full:latest" }
+    ],
+    "buildpacks": [
+      { "id": "paketo-buildpacks/ca-certificates", "version": "3.8.0" },
+      { "id": "paketo-buildpacks/syft", "version": "2.0.0" }
+    ],
+    "processes": [],
+    "rebasable": true
+  },
+  "remote_info": null
+}
