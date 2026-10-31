@@ -327,6 +327,11 @@ var noiseExact = map[string]bool{
 	"_":                 true,
 	"MEMORY_AVAILABLE":  true, // node-engine exec.d
 	"JAVA_TOOL_OPTIONS": true, // Java memory calculator exec.d
+	// Layout-derived paths (spec v4): the original points into /layers, the
+	// generated image installs Node at /usr/local. NODE_HOME is translated in
+	// the Dockerfile; the literal value still differs by design.
+	"NODE_HOME":       true,
+	"LD_LIBRARY_PATH": true,
 }
 
 var noisePrefixes = []string{"LC_", "CNB_", "BP_", "BPL_"}

@@ -69,6 +69,8 @@ func TestDiffEnv(t *testing.T) {
 		"MEMORY_AVAILABLE": "1024",
 		"CNB_APP_DIR":      "/workspace",
 		"LANG":             "C.UTF-8",
+		"NODE_HOME":        "/layers/paketo-buildpacks_node-engine/node",
+		"LD_LIBRARY_PATH":  "/layers/paketo-buildpacks-node-engine/node/lib",
 	}
 	gen := map[string]string{
 		"NODE_ENV": "production",

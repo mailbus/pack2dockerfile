@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mailbus/pack2dockerfile/internal/dockerfile"
+	"github.com/mailbus/pack2dockerfile/internal/imageinfo"
 )
 
 func dockerAvailable(t *testing.T) {
@@ -109,5 +112,53 @@ func TestDetectsMismatches(t *testing.T) {
 				t.Error("report should contain a FAIL line")
 			}
 		})
+	}
+}
+
+// TestGeneratedNodeDockerfile is the M1 closed loop (ticket 03): read the
+// image, render a Dockerfile with p2df's template, rebuild it from the
+// fixture source, and require all four behavior checks to pass.
+func TestGeneratedNodeDockerfile(t *testing.T) {
+	dockerAvailable(t)
+	orig := testImage(t)
+	ctx := context.Background()
+	runner := imageinfo.ExecRunner{}
+
+	img, err := imageinfo.Load(ctx, runner, orig)
+	if err != nil {
+		t.Fatalf("load image: %v", err)
+	}
+	nodeVersion, err := imageinfo.NodeEngineVersion(ctx, runner, orig)
+	if err != nil {
+		t.Fatalf("node version: %v", err)
+	}
+	launchEnv, err := dockerfile.ReadLaunchEnv(ctx, runner, orig)
+	if err != nil {
+		t.Fatalf("read launch env: %v", err)
+	}
+	rendered, err := dockerfile.Render(dockerfile.Input{Image: img, NodeVersion: nodeVersion, LaunchEnv: launchEnv})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	t.Logf("generated Dockerfile:\n%s", rendered)
+
+	fixture, err := filepath.Abs(filepath.Join("..", "..", "fixtures", "node-hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	df, _ := writeDockerfile(t, string(rendered))
+	res, err := Run(ctx, Options{
+		Original:   orig,
+		Dockerfile: df,
+		ContextDir: fixture,
+		Tag:        "p2df-verify-generated",
+		Timeout:    60 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	t.Logf("report:\n%s", res)
+	if !res.Passed() {
+		t.Fatalf("generated Dockerfile should pass the four checks")
 	}
 }

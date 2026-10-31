@@ -53,9 +53,11 @@ type Buildpack struct {
 // Image is the normalized view of a built CNB image.
 type Image struct {
 	Name           string      `json:"name"`
+	ImageID        string      `json:"image_id,omitempty"`
 	Stack          string      `json:"stack,omitempty"`
 	RunImage       string      `json:"run_image,omitempty"`
 	User           string      `json:"user,omitempty"`
+	WorkingDir     string      `json:"working_dir,omitempty"`
 	Processes      []Process   `json:"processes"`
 	DefaultProcess *Process    `json:"default_process,omitempty"`
 	Buildpacks     []Buildpack `json:"buildpacks"`
@@ -84,23 +86,21 @@ func (e *AmbiguousError) Error() string {
 	return fmt.Sprintf("ambiguous image: multiple language families detected (%s); p2df expects a single-language image", strings.Join(e.Languages, ", "))
 }
 
-// Load reads pack inspect output and image labels and returns the model.
-// It requires the image to exist locally (docker image inspect).
+// Load reads image metadata and returns the model. pack inspect-image is used
+// when it works; the image labels are the fallback and the real requirement is
+// that the image exists locally (docker image inspect).
 func Load(ctx context.Context, r Runner, image string) (*Image, error) {
-	rawInspect, err := r.Output(ctx, "pack", "inspect-image", image, "--output", "json")
-	if err != nil {
-		return nil, fmt.Errorf("pack inspect-image %s: %w", image, err)
-	}
+	image = withDefaultTag(image)
+
+	// pack inspect-image also contacts the registry even for local images and
+	// aborts when it is unreachable. Everything we need is in the image labels,
+	// so treat pack as best-effort and synthesize the rest below.
 	var inspect packInspect
-	if err := json.Unmarshal(rawInspect, &inspect); err != nil {
-		return nil, fmt.Errorf("parse pack inspect output: %w", err)
-	}
-	info := inspect.Local
-	if info == nil {
-		info = inspect.Remote
-	}
-	if info == nil {
-		return nil, fmt.Errorf("pack inspect-image returned no info for %q", image)
+	rawInspect, err := r.Output(ctx, "pack", "inspect-image", image, "--output", "json")
+	if err == nil {
+		if err := json.Unmarshal(rawInspect, &inspect); err != nil {
+			return nil, fmt.Errorf("parse pack inspect output: %w", err)
+		}
 	}
 
 	rawDocker, err := r.Output(ctx, "docker", "image", "inspect", image)
@@ -125,6 +125,21 @@ func Load(ctx context.Context, r Runner, image string) (*Image, error) {
 		return nil, fmt.Errorf("parse %s label: %w", LabelLifecycleMetadata, err)
 	}
 
+	info := inspect.Local
+	if info == nil {
+		info = inspect.Remote
+	}
+	if info == nil {
+		info = &packInfo{}
+	}
+	if info.Stack == "" {
+		info.Stack = dockerImg.Config.Labels["io.buildpacks.stack.id"]
+	}
+	name := inspect.ImageName
+	if name == "" {
+		name = image
+	}
+
 	buildpacks := info.Buildpacks
 	if len(buildpacks) == 0 && buildMeta != nil {
 		buildpacks = buildMeta.Buildpacks
@@ -147,15 +162,31 @@ func Load(ctx context.Context, r Runner, image string) (*Image, error) {
 	}
 
 	return &Image{
-		Name:           inspect.ImageName,
+		Name:           name,
+		ImageID:        dockerImg.ID,
 		Stack:          info.Stack,
 		RunImage:       runImageFrom(info, lifecycleMeta),
 		User:           dockerImg.Config.User,
+		WorkingDir:     dockerImg.Config.WorkingDir,
 		Processes:      processes,
 		DefaultProcess: defaultProcess(processes),
 		Buildpacks:     buildpacks,
 		Languages:      languages,
 	}, nil
+}
+
+// withDefaultTag appends :latest when the reference has no tag or digest.
+// pack's local lookup needs a full reference on Docker Desktop; docker itself
+// accepts the short form, so normalize once for every command.
+func withDefaultTag(image string) string {
+	if strings.Contains(image, "@") {
+		return image
+	}
+	lastSlash := strings.LastIndex(image, "/")
+	if strings.Contains(image[lastSlash+1:], ":") {
+		return image
+	}
+	return image + ":latest"
 }
 
 // LabelBuildMetadata is the CNB label carrying buildpack and process metadata.
@@ -220,6 +251,7 @@ func processesFromBuildMetadata(meta *buildMetadata) []Process {
 			Command:    cmd,
 			Args:       args,
 			Direct:     p.Direct,
+			Default:    p.Type == meta.DefaultProcessType,
 			WorkingDir: p.WorkingDir,
 		})
 	}
@@ -277,7 +309,8 @@ type buildMetadata struct {
 		Direct     bool     `json:"direct"`
 		WorkingDir string   `json:"working-dir"`
 	} `json:"processes"`
-	Buildpacks []Buildpack `json:"buildpacks"`
+	Buildpacks         []Buildpack `json:"buildpacks"`
+	DefaultProcessType string      `json:"buildpack-default-process-type"`
 }
 
 // lifecycleMetadata mirrors the io.buildpacks.lifecycle.metadata label.
@@ -301,9 +334,11 @@ type lifecycleMetadata struct {
 }
 
 type dockerImage struct {
+	ID     string `json:"Id"`
 	Config struct {
-		User   string            `json:"User"`
-		Env    []string          `json:"Env"`
-		Labels map[string]string `json:"Labels"`
+		User       string            `json:"User"`
+		Env        []string          `json:"Env"`
+		WorkingDir string            `json:"WorkingDir"`
+		Labels     map[string]string `json:"Labels"`
 	} `json:"Config"`
 }

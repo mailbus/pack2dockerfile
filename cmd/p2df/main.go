@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 
+	"github.com/mailbus/pack2dockerfile/internal/dockerfile"
 	"github.com/mailbus/pack2dockerfile/internal/imageinfo"
 	"github.com/spf13/cobra"
 )
@@ -32,7 +32,7 @@ func exitCode(err error) int {
 }
 
 func newRootCmd() *cobra.Command {
-	var output string
+	var output, builder string
 	cmd := &cobra.Command{
 		Use:           "p2df <image>",
 		Short:         "Turn a Cloud Native Buildpacks image into a Dockerfile",
@@ -41,22 +41,42 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			img, err := imageinfo.Load(cmd.Context(), imageinfo.ExecRunner{}, args[0])
+			ctx := cmd.Context()
+			runner := imageinfo.ExecRunner{}
+			image := args[0]
+
+			img, err := imageinfo.Load(ctx, runner, image)
 			if err != nil {
 				return err
 			}
-			data, err := json.MarshalIndent(img, "", "  ")
+			if len(img.Languages) != 1 || img.Languages[0] != "node" {
+				return fmt.Errorf("no template for language %v yet (only Node is supported)", img.Languages)
+			}
+			nodeVersion, err := imageinfo.NodeEngineVersion(ctx, runner, image)
 			if err != nil {
 				return err
 			}
-			data = append(data, '\n')
+			launchEnv, err := dockerfile.ReadLaunchEnv(ctx, runner, image)
+			if err != nil {
+				return err
+			}
+			out, err := dockerfile.Render(dockerfile.Input{
+				Image:       img,
+				NodeVersion: nodeVersion,
+				LaunchEnv:   launchEnv,
+				Builder:     builder,
+			})
+			if err != nil {
+				return err
+			}
 			if output != "" {
-				return os.WriteFile(output, data, 0o644)
+				return os.WriteFile(output, out, 0o644)
 			}
-			_, err = cmd.OutOrStdout().Write(data)
+			_, err = cmd.OutOrStdout().Write(out)
 			return err
 		},
 	}
-	cmd.Flags().StringVarP(&output, "output", "o", "", "write the output to FILE instead of stdout")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "write the Dockerfile to FILE instead of stdout")
+	cmd.Flags().StringVar(&builder, "builder", "", "builder name to annotate in the header (not recorded in the image)")
 	return cmd
 }

@@ -23,10 +23,27 @@ func (f fakeRunner) Output(_ context.Context, name string, args ...string) ([]by
 }
 
 func runnerFor(image, inspectFixture string) fakeRunner {
+	ref := withDefaultTag(image)
 	return fakeRunner{files: map[string]string{
-		"pack inspect-image " + image + " --output json": "testdata/" + inspectFixture,
-		"docker image inspect " + image:                  "testdata/docker_inspect_node.json",
+		"pack inspect-image " + ref + " --output json": "testdata/" + inspectFixture,
+		"docker image inspect " + ref:                  "testdata/docker_inspect_node.json",
 	}}
+}
+
+func TestWithDefaultTag(t *testing.T) {
+	cases := map[string]string{
+		"node-hello":                        "node-hello:latest",
+		"node-hello:v1":                     "node-hello:v1",
+		"registry:5000/app":                 "registry:5000/app:latest",
+		"registry:5000/app:v1":              "registry:5000/app:v1",
+		"paketobuildpacks/run-jammy-full":   "paketobuildpacks/run-jammy-full:latest",
+		"ghcr.io/org/app@sha256:0000000000": "ghcr.io/org/app@sha256:0000000000",
+	}
+	for in, want := range cases {
+		if got := withDefaultTag(in); got != want {
+			t.Errorf("withDefaultTag(%q) = %q, want %q", in, got, want)
+		}
+	}
 }
 
 func TestLoadNode(t *testing.T) {
@@ -54,6 +71,30 @@ func TestLoadNode(t *testing.T) {
 	}
 	if got, want := img.User, "1002:1000"; got != want {
 		t.Errorf("user = %q, want %q", got, want)
+	}
+}
+
+// pack falls back to the registry and fails offline; the image labels must be
+// enough to build the model.
+func TestLoadWithoutPack(t *testing.T) {
+	r := fakeRunner{files: map[string]string{
+		"docker image inspect my-app:latest": "testdata/docker_inspect_node.json",
+	}}
+	img, err := Load(context.Background(), r, "my-app")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := strings.Join(img.Languages, ","), "node"; got != want {
+		t.Errorf("languages = %q, want %q", got, want)
+	}
+	if img.DefaultProcess == nil || img.DefaultProcess.Command != "node" {
+		t.Fatalf("default process = %+v, want node", img.DefaultProcess)
+	}
+	if img.RunImage == "" {
+		t.Error("run image should come from the lifecycle label")
+	}
+	if img.Name != "my-app:latest" {
+		t.Errorf("name = %q, want my-app:latest", img.Name)
 	}
 }
 
