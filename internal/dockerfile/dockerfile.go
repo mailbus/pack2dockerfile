@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -36,17 +37,24 @@ type runtime struct {
 	Language   string
 	BuildImage string
 	Setup      []string // Dockerfile lines for the build stage
+	Copy       []string // runtime paths to copy from the build stage
 	Note       []string // header comments about distro equivalence
 	Translate  func([]Env) []Env
+	// NormalizeCommand rewrites the default process command for the generated
+	// image (Go points at a /layers path that only exists in CNB images).
+	NormalizeCommand func(string) string
+	// PathPrepend puts the workdir on PATH so a bare binary name resolves.
+	PathPrepend bool
 }
 
-func runtimeFor(language, version string) (runtime, error) {
+func runtimeFor(language, version string, proc *imageinfo.Process) (runtime, error) {
 	switch language {
 	case "node":
 		return runtime{
 			Language:   "node",
 			BuildImage: "node:" + version,
 			Setup:      []string{"RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi"},
+			Copy:       []string{"/usr/local"},
 			Note: []string{
 				"The official Node image is Debian-based; the Paketo stack is Ubuntu jammy.",
 				"The node binary itself is the nodejs.org build and runs on jammy's glibc.",
@@ -58,12 +66,31 @@ func runtimeFor(language, version string) (runtime, error) {
 			Language:   "python",
 			BuildImage: "python:" + version + "-bookworm",
 			Setup:      []string{"RUN pip install --no-cache-dir -r requirements.txt"},
+			Copy:       []string{"/usr/local"},
 			Note: []string{
 				"There is no official Python image for the jammy stack. The default",
 				"(trixie) image needs GLIBC_2.38 and does not run on jammy; the bookworm",
 				"variant does (verified by the behavior checks).",
 			},
 			Translate: func(env []Env) []Env { return translatePythonPaths(env, version) },
+		}, nil
+	case "go":
+		binary := filepath.Base(proc.Command)
+		return runtime{
+			Language:   "go",
+			BuildImage: "golang:" + version + "-bookworm",
+			Setup:      []string{"RUN go build -trimpath -o " + binary + " ."},
+			Note: []string{
+				"Go binaries are self-contained; only the compiled binary is copied",
+				"from the bookworm build stage to the jammy run image.",
+			},
+			NormalizeCommand: func(cmd string) string {
+				if strings.HasPrefix(cmd, "/layers/") {
+					return filepath.Base(cmd)
+				}
+				return cmd
+			},
+			PathPrepend: true,
 		}, nil
 	}
 	return runtime{}, fmt.Errorf("no template for language %q yet", language)
@@ -87,25 +114,31 @@ func Render(in Input) ([]byte, error) {
 	if len(in.Image.Languages) == 1 {
 		language = in.Image.Languages[0]
 	}
-	rt, err := runtimeFor(language, in.RuntimeVersion)
+	rt, err := runtimeFor(language, in.RuntimeVersion, in.Image.DefaultProcess)
 	if err != nil {
 		return nil, err
 	}
 
-	entrypoint, err := json.Marshal(entrypointFor(in.Image.DefaultProcess))
-	if err != nil {
-		return nil, err
-	}
 	workdir := in.Image.WorkingDir
 	if workdir == "" {
 		workdir = "/workspace"
+	}
+	entrypoint, err := json.Marshal(entrypointFor(in.Image.DefaultProcess, rt))
+	if err != nil {
+		return nil, err
 	}
 	user := in.Image.User
 	if user == "" {
 		user = "1002:1000"
 	}
 
-	env := rt.Translate(append([]Env(nil), in.LaunchEnv...))
+	env := append([]Env(nil), in.LaunchEnv...)
+	if rt.Translate != nil {
+		env = rt.Translate(env)
+	}
+	if rt.PathPrepend {
+		env = append(env, Env{Key: "PATH", Value: workdir + ":$PATH"})
+	}
 	sort.Slice(env, func(i, j int) bool { return env[i].Key < env[j].Key })
 
 	var b bytes.Buffer
@@ -138,8 +171,12 @@ func Render(in Input) ([]byte, error) {
 
 // entrypointFor mirrors the CNB process: exec-form becomes ENTRYPOINT argv,
 // shell-form becomes ["/bin/<shell>","-c",command] (CNB defaults to bash).
-func entrypointFor(p *imageinfo.Process) []string {
-	argv := append([]string{p.Command}, p.Args...)
+func entrypointFor(p *imageinfo.Process, rt runtime) []string {
+	command := p.Command
+	if rt.NormalizeCommand != nil {
+		command = rt.NormalizeCommand(command)
+	}
+	argv := append([]string{command}, p.Args...)
 	if p.Direct {
 		return argv
 	}
@@ -212,10 +249,14 @@ type processLine struct {
 func processLines(img *imageinfo.Image) []processLine {
 	out := make([]processLine, 0, len(img.Processes))
 	for _, p := range img.Processes {
-		argv := append([]string{p.Command}, p.Args...)
+		cmd := p.Command
+		if strings.HasPrefix(cmd, "/layers/") {
+			cmd = filepath.Base(cmd)
+		}
+		argv := append([]string{cmd}, p.Args...)
 		var example string
 		if p.Direct {
-			example = "docker run --rm -it --entrypoint " + p.Command + " " + img.Name
+			example = "docker run --rm -it --entrypoint " + cmd + " " + img.Name
 			if len(p.Args) > 0 {
 				example += " " + strings.Join(p.Args, " ")
 			}
@@ -273,7 +314,9 @@ FROM {{.Image.RunImage}}
 USER {{.User}}
 WORKDIR {{.Workdir}}
 COPY --from=build --chown={{.User}} {{.Workdir}} {{.Workdir}}
-COPY --from=build /usr/local /usr/local
+{{- range .Runtime.Copy}}
+COPY --from=build {{.}} {{.}}
+{{- end}}
 {{- range .Env}}
 ENV {{.Key}}={{q .Value}}
 {{- end}}

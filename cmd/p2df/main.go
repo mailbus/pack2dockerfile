@@ -58,6 +58,8 @@ func newRootCmd() *cobra.Command {
 				runtimeVersion, err = imageinfo.NodeEngineVersion(ctx, runner, image)
 			case "python":
 				runtimeVersion, err = imageinfo.CPythonVersion(ctx, runner, image)
+			case "go":
+				runtimeVersion, err = imageinfo.GoVersion(ctx, runner, image, img.DefaultProcess.Command)
 			default:
 				return fmt.Errorf("no template for language %q yet", img.Languages[0])
 			}

@@ -96,7 +96,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	res := &Result{}
 
 	// 1. Process: normalized default process vs generated entrypoint.
-	origCmd := commandLine(info.DefaultProcess)
+	origCmd := normalizeCNBCommand(commandLine(info.DefaultProcess))
 	genCmd := generatedCommandLine(cfg, origCmd)
 	res.Checks = append(res.Checks, Check{
 		Name:   "process",
@@ -215,6 +215,18 @@ func commandLine(p *imageinfo.Process) string {
 		return ""
 	}
 	return strings.Join(append([]string{p.Command}, p.Args...), " ")
+}
+
+// normalizeCNBCommand replaces a buildpack-internal /layers path with its
+// basename (spec v6). The path only exists inside CNB images; generated images
+// put the same binary under the app workdir.
+func normalizeCNBCommand(cmd string) string {
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 || !strings.HasPrefix(fields[0], "/layers/") {
+		return cmd
+	}
+	fields[0] = filepath.Base(fields[0])
+	return strings.Join(fields, " ")
 }
 
 // generatedCommandLine normalizes the generated image's entrypoint. Images

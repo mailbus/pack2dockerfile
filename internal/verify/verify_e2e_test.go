@@ -138,6 +138,8 @@ func verifyGeneratedImage(t *testing.T, fixture string) {
 		runtimeVersion, err = imageinfo.NodeEngineVersion(ctx, runner, orig)
 	case "python":
 		runtimeVersion, err = imageinfo.CPythonVersion(ctx, runner, orig)
+	case "go":
+		runtimeVersion, err = imageinfo.GoVersion(ctx, runner, orig, img.DefaultProcess.Command)
 	default:
 		t.Fatalf("no template for language %q", img.Languages[0])
 	}
@@ -183,4 +185,9 @@ func TestGeneratedNodeDockerfile(t *testing.T) {
 // M2 closed loop (ticket 04).
 func TestGeneratedPythonDockerfile(t *testing.T) {
 	verifyGeneratedImage(t, "python-hello")
+}
+
+// M3 closed loop (ticket 05).
+func TestGeneratedGoDockerfile(t *testing.T) {
+	verifyGeneratedImage(t, "go-hello")
 }

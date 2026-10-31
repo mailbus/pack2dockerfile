@@ -57,6 +57,20 @@ func TestGeneratedCommandLine(t *testing.T) {
 	}
 }
 
+func TestNormalizeCNBCommand(t *testing.T) {
+	cases := map[string]string{
+		"/layers/paketo-buildpacks_go-build/targets/bin/go-hello":    "go-hello",
+		"/layers/paketo-buildpacks_go-build/targets/bin/go-hello -v": "go-hello -v",
+		"node server.js": "node server.js",
+		"/workspace/app": "/workspace/app",
+	}
+	for in, want := range cases {
+		if got := normalizeCNBCommand(in); got != want {
+			t.Errorf("normalizeCNBCommand(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestCommandLine(t *testing.T) {
 	p := &imageinfo.Process{Command: "node", Args: []string{"server.js"}}
 	if got, want := commandLine(p), "node server.js"; got != want {

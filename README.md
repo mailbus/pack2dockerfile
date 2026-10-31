@@ -8,7 +8,7 @@ Buildpacks give you reproducible builds, but the result is locked behind a build
 
 ## Status
 
-MVP, work in progress. Node.js and Python are supported end to end; Go and Java are planned. Verified against `paketobuildpacks/builder-jammy-full`, see [`fixtures/`](fixtures/).
+MVP, work in progress. Node.js, Python, and Go are supported end to end; Java is planned. Verified against `paketobuildpacks/builder-jammy-full`, see [`fixtures/`](fixtures/).
 
 ## Usage
 
@@ -33,7 +33,7 @@ docker run --rm -p 8080:8080 node-hello-rebuilt
 - Resolves the runtime version from the image SBOM (`pack sbom download`), e.g. the `Node Engine` component.
 - Reads static runtime env from `/layers/**/env` and `/layers/**/env.launch`.
 - Renders a multi-stage Dockerfile:
-  - build stage: official runtime image (`node:<version>`, `python:<version>-bookworm`), `npm ci`/`npm install` or `pip install`;
+  - build stage: official runtime image (`node:<version>`, `python:<version>-bookworm`, `golang:<version>-bookworm`), `npm ci`/`npm install`, `pip install`, or `go build`;
   - run stage: the original CNB run image, runtime user and workdir from the image, application and Node distribution copied in, static env, and an exec-form `ENTRYPOINT` for the default process;
   - header comments with the original image digest, buildpack versions, and the full process table.
 

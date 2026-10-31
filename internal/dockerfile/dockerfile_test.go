@@ -109,6 +109,44 @@ func TestRenderPythonShellProcess(t *testing.T) {
 	}
 }
 
+func TestRenderGo(t *testing.T) {
+	img := &imageinfo.Image{
+		Name:       "go-hello:latest",
+		ImageID:    "sha256:789abc",
+		Stack:      "io.buildpacks.stacks.jammy",
+		RunImage:   "paketobuildpacks/run-jammy-full:latest",
+		User:       "1002:1000",
+		WorkingDir: "/workspace",
+		Buildpacks: []imageinfo.Buildpack{{ID: "paketo-buildpacks/go-build", Version: "2.4.47"}},
+		Processes: []imageinfo.Process{
+			{Type: "go-hello", Command: "/layers/paketo-buildpacks_go-build/targets/bin/go-hello", Direct: true, Default: true, WorkingDir: "/workspace"},
+		},
+		Languages:      []string{"go"},
+		DefaultProcess: nil,
+	}
+	img.DefaultProcess = &img.Processes[0]
+	out, err := Render(Input{Image: img, RuntimeVersion: "1.27.3"})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		"FROM golang:1.27.3-bookworm AS build",
+		"RUN go build -trimpath -o go-hello .",
+		"#   go-hello (default): go-hello",
+		"#   docker run --rm -it --entrypoint go-hello go-hello:latest",
+		"ENV PATH=\"/workspace:$PATH\"",
+		"ENTRYPOINT [\"go-hello\"]",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("Dockerfile missing %q\n---\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "COPY --from=build /usr/local /usr/local") {
+		t.Error("Go image should not copy /usr/local")
+	}
+}
+
 func TestRenderRejectsUnknownLanguage(t *testing.T) {
 	img := sampleImage()
 	img.Languages = []string{"ruby"}

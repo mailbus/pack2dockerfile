@@ -44,6 +44,19 @@ func TestFindCPythonVersion(t *testing.T) {
 	}
 }
 
+func TestFindGoVersion(t *testing.T) {
+	dir := t.TempDir()
+	writeSBOM(t, dir, "layers/sbom/launch/paketo-buildpacks_go-build/targets/sbom.cdx.json",
+		`{"components":[{"name":"go-hello","version":"UNKNOWN"},{"name":"stdlib","version":"go1.27.3","cpe":"cpe:2.3:a:golang:go:1.27.3"}]}`)
+	got, err := findGoVersion(dir, "go-hello")
+	if err != nil {
+		t.Fatalf("findGoVersion: %v", err)
+	}
+	if got != "1.27.3" {
+		t.Errorf("version = %q, want 1.27.3", got)
+	}
+}
+
 func TestFindRuntimeVersionLegacy(t *testing.T) {
 	dir := t.TempDir()
 	writeSBOM(t, dir, "layers/sbom/launch/sbom.legacy.json",
