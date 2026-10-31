@@ -30,10 +30,10 @@ func renderSample(t *testing.T) string {
 	img := sampleImage()
 	img.DefaultProcess = &img.Processes[0]
 	out, err := Render(Input{
-		Image:       img,
-		NodeVersion: "24.22.1",
-		LaunchEnv:   []Env{{Key: "NODE_PROJECT_PATH", Value: "/workspace"}, {Key: "NPM_CONFIG_LOGLEVEL", Value: "error"}},
-		Builder:     "paketobuildpacks/builder-jammy-full",
+		Image:          img,
+		RuntimeVersion: "24.22.1",
+		LaunchEnv:      []Env{{Key: "NODE_PROJECT_PATH", Value: "/workspace"}, {Key: "NPM_CONFIG_LOGLEVEL", Value: "error"}},
+		Builder:        "paketobuildpacks/builder-jammy-full",
 	})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -49,13 +49,14 @@ func TestRenderNode(t *testing.T) {
 		"USER 1002:1000",
 		"WORKDIR /workspace",
 		"COPY --from=build --chown=1002:1000 /workspace /workspace",
+		"COPY --from=build /usr/local /usr/local",
 		"ENV NODE_PROJECT_PATH=\"/workspace\"",
 		"ENV NPM_CONFIG_LOGLEVEL=\"error\"",
 		"CMD []",
 		"ENTRYPOINT [\"node\",\"server.js\"]",
 		"# Builder: paketobuildpacks/builder-jammy-full",
 		"# Buildpacks: paketo-buildpacks/node-engine 8.11.1;",
-		"# Node: 24.22.1 (from image SBOM)",
+		"# Runtime: node:24.22.1 (from image SBOM)",
 		"#   web (default): node server.js",
 		"#   worker: node worker.js",
 		"#   docker run --rm -it --entrypoint node node-hello:latest worker.js",
@@ -64,18 +65,57 @@ func TestRenderNode(t *testing.T) {
 			t.Errorf("Dockerfile missing %q\n---\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "buildpack 内部") {
-		t.Error("unexpected marker")
+}
+
+func TestRenderPythonShellProcess(t *testing.T) {
+	img := &imageinfo.Image{
+		Name:       "python-hello:latest",
+		ImageID:    "sha256:def456",
+		Stack:      "io.buildpacks.stacks.jammy",
+		RunImage:   "paketobuildpacks/run-jammy-full:latest",
+		User:       "1002:1000",
+		WorkingDir: "/workspace",
+		Buildpacks: []imageinfo.Buildpack{{ID: "paketo-buildpacks/cpython", Version: "1.18.50"}},
+		Processes: []imageinfo.Process{
+			{Type: "web", Command: "python app.py", Shell: "bash", Default: true, WorkingDir: "/workspace"},
+		},
+		Languages:      []string{"python"},
+		DefaultProcess: nil,
+	}
+	img.DefaultProcess = &img.Processes[0]
+	out, err := Render(Input{
+		Image:          img,
+		RuntimeVersion: "3.11.18",
+		LaunchEnv: []Env{{
+			Key:   "PYTHONPATH",
+			Value: "/layers/paketo-buildpacks_pip-install/packages/lib/python3.11/site-packages:/layers/paketo-buildpacks_cpython/cpython",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		"FROM python:3.11.18-bookworm AS build",
+		"RUN pip install --no-cache-dir -r requirements.txt",
+		"COPY --from=build /usr/local /usr/local",
+		"ENV PYTHONPATH=\"/usr/local/lib/python3.11/site-packages:/usr/local\"",
+		"ENTRYPOINT [\"/bin/bash\",\"-c\",\"python app.py\"]",
+		"#   docker run --rm -it --entrypoint /bin/bash python-hello:latest -c \"python app.py\"",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("Dockerfile missing %q\n---\n%s", want, s)
+		}
 	}
 }
 
-func TestRenderRejectsShellProcess(t *testing.T) {
+func TestRenderRejectsUnknownLanguage(t *testing.T) {
 	img := sampleImage()
-	img.Processes[0].Direct = false
+	img.Languages = []string{"ruby"}
 	img.DefaultProcess = &img.Processes[0]
-	_, err := Render(Input{Image: img, NodeVersion: "24.22.1"})
+	_, err := Render(Input{Image: img, RuntimeVersion: "3.3"})
 	if err == nil {
-		t.Fatal("want error for shell-form process")
+		t.Fatal("want error for unsupported language")
 	}
 }
 
@@ -109,9 +149,17 @@ func TestParseLaunchEnv(t *testing.T) {
 		"/layers/x/y/node_modules/.bin",
 		"@@FILE /layers/x/y/env.launch/CNB_FOO.default",
 		"ignored",
+		"@@FILE /layers/paketo-buildpacks_cpython/cpython/env/PYTHONPATH.default",
+		"/layers/paketo-buildpacks_cpython/cpython",
+		"@@FILE /layers/paketo-buildpacks_pip-install/packages/env/PYTHONPATH.prepend",
+		"/layers/paketo-buildpacks_pip-install/packages/lib/python3.11/site-packages",
 	}, "\n")
 	got := parseLaunchEnv(raw)
-	want := []Env{{Key: "NODE_PROJECT_PATH", Value: "/app"}, {Key: "NPM_CONFIG_LOGLEVEL", Value: "error"}}
+	want := []Env{
+		{Key: "NODE_PROJECT_PATH", Value: "/app"},
+		{Key: "NPM_CONFIG_LOGLEVEL", Value: "error"},
+		{Key: "PYTHONPATH", Value: "/layers/paketo-buildpacks_pip-install/packages/lib/python3.11/site-packages:/layers/paketo-buildpacks_cpython/cpython"},
+	}
 	if len(got) != len(want) {
 		t.Fatalf("env = %v, want %v", got, want)
 	}

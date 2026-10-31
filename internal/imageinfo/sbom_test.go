@@ -18,34 +18,47 @@ func writeSBOM(t *testing.T, dir, rel, content string) {
 	}
 }
 
-func TestFindNodeEngineVersionCDX(t *testing.T) {
+func TestFindRuntimeVersionCDX(t *testing.T) {
 	dir := t.TempDir()
 	writeSBOM(t, dir, "layers/sbom/launch/paketo-buildpacks_node-engine/node/sbom.cdx.json",
 		`{"components":[{"name":"Node Engine","version":"24.22.1"}]}`)
-	got, err := findNodeEngineVersion(dir)
+	got, err := findRuntimeVersion(dir, "Node Engine")
 	if err != nil {
-		t.Fatalf("findNodeEngineVersion: %v", err)
+		t.Fatalf("findRuntimeVersion: %v", err)
 	}
 	if got != "24.22.1" {
 		t.Errorf("version = %q, want 24.22.1", got)
 	}
 }
 
-func TestFindNodeEngineVersionLegacy(t *testing.T) {
+func TestFindCPythonVersion(t *testing.T) {
+	dir := t.TempDir()
+	writeSBOM(t, dir, "layers/sbom/launch/paketo-buildpacks_cpython/cpython/sbom.cdx.json",
+		`{"components":[{"name":"CPython","version":"3.11.18"}]}`)
+	got, err := findRuntimeVersion(dir, "CPython", "Python")
+	if err != nil {
+		t.Fatalf("findRuntimeVersion: %v", err)
+	}
+	if got != "3.11.18" {
+		t.Errorf("version = %q, want 3.11.18", got)
+	}
+}
+
+func TestFindRuntimeVersionLegacy(t *testing.T) {
 	dir := t.TempDir()
 	writeSBOM(t, dir, "layers/sbom/launch/sbom.legacy.json",
 		`[{"name":"Node Engine","metadata":{"version":"20.11.0"}}]`)
-	got, err := findNodeEngineVersion(dir)
+	got, err := findRuntimeVersion(dir, "Node Engine")
 	if err != nil {
-		t.Fatalf("findNodeEngineVersion: %v", err)
+		t.Fatalf("findRuntimeVersion: %v", err)
 	}
 	if got != "20.11.0" {
 		t.Errorf("version = %q, want 20.11.0", got)
 	}
 }
 
-func TestFindNodeEngineVersionMissing(t *testing.T) {
-	_, err := findNodeEngineVersion(t.TempDir())
+func TestFindRuntimeVersionMissing(t *testing.T) {
+	_, err := findRuntimeVersion(t.TempDir(), "Node Engine")
 	if err == nil {
 		t.Fatal("want error")
 	}

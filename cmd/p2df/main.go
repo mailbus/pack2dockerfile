@@ -49,10 +49,18 @@ func newRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(img.Languages) != 1 || img.Languages[0] != "node" {
-				return fmt.Errorf("no template for language %v yet (only Node is supported)", img.Languages)
+			if len(img.Languages) != 1 {
+				return fmt.Errorf("no template for language %v yet", img.Languages)
 			}
-			nodeVersion, err := imageinfo.NodeEngineVersion(ctx, runner, image)
+			var runtimeVersion string
+			switch img.Languages[0] {
+			case "node":
+				runtimeVersion, err = imageinfo.NodeEngineVersion(ctx, runner, image)
+			case "python":
+				runtimeVersion, err = imageinfo.CPythonVersion(ctx, runner, image)
+			default:
+				return fmt.Errorf("no template for language %q yet", img.Languages[0])
+			}
 			if err != nil {
 				return err
 			}
@@ -61,10 +69,10 @@ func newRootCmd() *cobra.Command {
 				return err
 			}
 			out, err := dockerfile.Render(dockerfile.Input{
-				Image:       img,
-				NodeVersion: nodeVersion,
-				LaunchEnv:   launchEnv,
-				Builder:     builder,
+				Image:          img,
+				RuntimeVersion: runtimeVersion,
+				LaunchEnv:      launchEnv,
+				Builder:        builder,
 			})
 			if err != nil {
 				return err

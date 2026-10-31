@@ -1,11 +1,12 @@
 // Package dockerfile renders a CNB image model back into a human-readable,
-// rebuildable Dockerfile (spec: 真·语义反推, MVP1 Node only).
+// rebuildable Dockerfile (spec: 真·语义反推, MVP1 Node/Python).
 package dockerfile
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"text/template"
@@ -16,7 +17,7 @@ import (
 // Version is stamped into the generated file header.
 const Version = "0.1.0-dev"
 
-// Env is one static launch environment variable read from /layers/**/env.launch.
+// Env is one static launch environment variable read from /layers/**/env[.launch].
 type Env struct {
 	Key   string
 	Value string
@@ -24,10 +25,48 @@ type Env struct {
 
 // Input is everything the template needs; it is pure data so rendering is testable.
 type Input struct {
-	Image       *imageinfo.Image
-	NodeVersion string
-	LaunchEnv   []Env
-	Builder     string // optional annotation; the builder is not recorded in the image
+	Image          *imageinfo.Image
+	RuntimeVersion string
+	LaunchEnv      []Env
+	Builder        string // optional annotation; the builder is not recorded in the image
+}
+
+// runtime describes the language-specific half of the template.
+type runtime struct {
+	Language   string
+	BuildImage string
+	Setup      []string // Dockerfile lines for the build stage
+	Note       []string // header comments about distro equivalence
+	Translate  func([]Env) []Env
+}
+
+func runtimeFor(language, version string) (runtime, error) {
+	switch language {
+	case "node":
+		return runtime{
+			Language:   "node",
+			BuildImage: "node:" + version,
+			Setup:      []string{"RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi"},
+			Note: []string{
+				"The official Node image is Debian-based; the Paketo stack is Ubuntu jammy.",
+				"The node binary itself is the nodejs.org build and runs on jammy's glibc.",
+			},
+			Translate: translateNodePaths,
+		}, nil
+	case "python":
+		return runtime{
+			Language:   "python",
+			BuildImage: "python:" + version + "-bookworm",
+			Setup:      []string{"RUN pip install --no-cache-dir -r requirements.txt"},
+			Note: []string{
+				"There is no official Python image for the jammy stack. The default",
+				"(trixie) image needs GLIBC_2.38 and does not run on jammy; the bookworm",
+				"variant does (verified by the behavior checks).",
+			},
+			Translate: func(env []Env) []Env { return translatePythonPaths(env, version) },
+		}, nil
+	}
+	return runtime{}, fmt.Errorf("no template for language %q yet", language)
 }
 
 // Render produces the Dockerfile.
@@ -38,18 +77,22 @@ func Render(in Input) ([]byte, error) {
 	if in.Image.DefaultProcess == nil {
 		return nil, fmt.Errorf("image %q has no default process", in.Image.Name)
 	}
-	if !in.Image.DefaultProcess.Direct {
-		return nil, fmt.Errorf("default process %q is shell-form; only exec-form processes are supported", in.Image.DefaultProcess.Type)
-	}
-	if in.NodeVersion == "" {
-		return nil, fmt.Errorf("missing node engine version")
+	if in.RuntimeVersion == "" {
+		return nil, fmt.Errorf("missing runtime version")
 	}
 	if in.Image.RunImage == "" {
 		return nil, fmt.Errorf("image %q has no run image recorded", in.Image.Name)
 	}
+	language := ""
+	if len(in.Image.Languages) == 1 {
+		language = in.Image.Languages[0]
+	}
+	rt, err := runtimeFor(language, in.RuntimeVersion)
+	if err != nil {
+		return nil, err
+	}
 
-	proc := in.Image.DefaultProcess
-	entrypoint, err := json.Marshal(append([]string{proc.Command}, proc.Args...))
+	entrypoint, err := json.Marshal(entrypointFor(in.Image.DefaultProcess))
 	if err != nil {
 		return nil, err
 	}
@@ -62,35 +105,49 @@ func Render(in Input) ([]byte, error) {
 		user = "1002:1000"
 	}
 
-	env := translateNodePaths(append([]Env(nil), in.LaunchEnv...))
+	env := rt.Translate(append([]Env(nil), in.LaunchEnv...))
 	sort.Slice(env, func(i, j int) bool { return env[i].Key < env[j].Key })
 
 	var b bytes.Buffer
 	err = tpl.Execute(&b, struct {
-		Version     string
-		Image       *imageinfo.Image
-		Builder     string
-		NodeVersion string
-		Entrypoint  string
-		Workdir     string
-		User        string
-		Env         []Env
-		Processes   []processLine
+		Version    string
+		Image      *imageinfo.Image
+		Runtime    runtime
+		Builder    string
+		Entrypoint string
+		Workdir    string
+		User       string
+		Env        []Env
+		Processes  []processLine
 	}{
-		Version:     Version,
-		Image:       in.Image,
-		Builder:     in.Builder,
-		NodeVersion: in.NodeVersion,
-		Entrypoint:  string(entrypoint),
-		Workdir:     workdir,
-		User:        user,
-		Env:         env,
-		Processes:   processLines(in.Image),
+		Version:    Version,
+		Image:      in.Image,
+		Runtime:    rt,
+		Builder:    in.Builder,
+		Entrypoint: string(entrypoint),
+		Workdir:    workdir,
+		User:       user,
+		Env:        env,
+		Processes:  processLines(in.Image),
 	})
 	if err != nil {
 		return nil, err
 	}
 	return b.Bytes(), nil
+}
+
+// entrypointFor mirrors the CNB process: exec-form becomes ENTRYPOINT argv,
+// shell-form becomes ["/bin/<shell>","-c",command] (CNB defaults to bash).
+func entrypointFor(p *imageinfo.Process) []string {
+	argv := append([]string{p.Command}, p.Args...)
+	if p.Direct {
+		return argv
+	}
+	shell := p.Shell
+	if shell == "" {
+		shell = "bash"
+	}
+	return []string{"/bin/" + shell, "-c", strings.Join(argv, " ")}
 }
 
 // nodePrefix is where the build stage installs the official Node distribution
@@ -121,6 +178,30 @@ func translateNodePaths(env []Env) []Env {
 	return env
 }
 
+// pythonSitePackages matches the pip-install layer path in PYTHONPATH.
+var pythonSitePackages = regexp.MustCompile(`/layers/[^:]*/site-packages`)
+
+// translatePythonPaths points PYTHONPATH at the official image layout:
+// the CPython layer becomes /usr/local and its site-packages becomes the
+// default site-packages promoted by the build stage's pip install.
+func translatePythonPaths(env []Env, version string) []Env {
+	site := "/usr/local/lib/python" + majorMinor(version) + "/site-packages"
+	for i, e := range env {
+		v := strings.ReplaceAll(e.Value, "/layers/paketo-buildpacks_cpython/cpython", "/usr/local")
+		env[i].Value = pythonSitePackages.ReplaceAllString(v, site)
+	}
+	return env
+}
+
+// majorMinor turns "3.11.18" into "3.11"; other versions pass through.
+func majorMinor(version string) string {
+	parts := strings.Split(version, ".")
+	if len(parts) < 2 {
+		return version
+	}
+	return parts[0] + "." + parts[1]
+}
+
 type processLine struct {
 	Type    string
 	Command string
@@ -132,9 +213,18 @@ func processLines(img *imageinfo.Image) []processLine {
 	out := make([]processLine, 0, len(img.Processes))
 	for _, p := range img.Processes {
 		argv := append([]string{p.Command}, p.Args...)
-		example := "docker run --rm -it --entrypoint " + p.Command + " " + img.Name
-		if len(p.Args) > 0 {
-			example += " " + strings.Join(p.Args, " ")
+		var example string
+		if p.Direct {
+			example = "docker run --rm -it --entrypoint " + p.Command + " " + img.Name
+			if len(p.Args) > 0 {
+				example += " " + strings.Join(p.Args, " ")
+			}
+		} else {
+			shell := p.Shell
+			if shell == "" {
+				shell = "bash"
+			}
+			example = "docker run --rm -it --entrypoint /bin/" + shell + " " + img.Name + " -c \"" + strings.Join(argv, " ") + "\""
 		}
 		out = append(out, processLine{
 			Type:    p.Type,
@@ -156,7 +246,7 @@ var tpl = template.Must(template.New("dockerfile").Funcs(template.FuncMap{"q": q
 # Original image: {{.Image.Name}} {{.Image.ImageID}}
 # Builder: {{if .Builder}}{{.Builder}}{{else}}not recorded in the image (pass --builder to annotate){{end}}
 # Buildpacks:{{range .Image.Buildpacks}} {{.ID}} {{.Version}};{{end}}
-# Node: {{.NodeVersion}} (from image SBOM)
+# Runtime: {{.Runtime.BuildImage}} (from image SBOM)
 # Stack: {{.Image.Stack}}
 #
 # Processes:
@@ -168,20 +258,22 @@ var tpl = template.Must(template.New("dockerfile").Funcs(template.FuncMap{"q": q
 {{- range .Processes}}
 #   {{.Example}}
 {{- end}}
-
-# The official Node image is Debian-based; the Paketo stack is Ubuntu jammy.
-# The node binary itself is the nodejs.org build and runs on jammy's glibc.
-FROM node:{{.NodeVersion}} AS build
+#
+{{- range .Runtime.Note}}
+# {{.}}
+{{- end}}
+FROM {{.Runtime.BuildImage}} AS build
 WORKDIR {{.Workdir}}
 COPY . .
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+{{- range .Runtime.Setup}}
+{{.}}
+{{- end}}
 
 FROM {{.Image.RunImage}}
 USER {{.User}}
 WORKDIR {{.Workdir}}
 COPY --from=build --chown={{.User}} {{.Workdir}} {{.Workdir}}
-COPY --from=build /usr/local/bin /usr/local/bin
-COPY --from=build /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=build /usr/local /usr/local
 {{- range .Env}}
 ENV {{.Key}}={{q .Value}}
 {{- end}}

@@ -42,6 +42,11 @@ func TestGeneratedCommandLine(t *testing.T) {
 			origCmd: "node server.js",
 			want:    "node server.js",
 		},
+		{
+			name: "shell form process",
+			cfg:  config{Entrypoint: []string{"/bin/bash", "-c", "python app.py"}},
+			want: "python app.py",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -64,13 +69,16 @@ func TestCommandLine(t *testing.T) {
 
 func TestDiffEnv(t *testing.T) {
 	orig := map[string]string{
-		"NODE_ENV":         "production",
-		"PATH":             "/cnb/process:/usr/bin",
-		"MEMORY_AVAILABLE": "1024",
-		"CNB_APP_DIR":      "/workspace",
-		"LANG":             "C.UTF-8",
-		"NODE_HOME":        "/layers/paketo-buildpacks_node-engine/node",
-		"LD_LIBRARY_PATH":  "/layers/paketo-buildpacks-node-engine/node/lib",
+		"NODE_ENV":            "production",
+		"PATH":                "/cnb/process:/usr/bin",
+		"MEMORY_AVAILABLE":    "1024",
+		"CNB_APP_DIR":         "/workspace",
+		"LANG":                "C.UTF-8",
+		"NODE_HOME":           "/layers/paketo-buildpacks_node-engine/node",
+		"LD_LIBRARY_PATH":     "/layers/paketo-buildpacks-node-engine/node/lib",
+		"PYTHONPATH":          "/layers/paketo-buildpacks_cpython/cpython",
+		"PYTHONPYCACHEPREFIX": "/home/cnb/.pycache",
+		"OLDPWD":              "/workspace",
 	}
 	gen := map[string]string{
 		"NODE_ENV": "production",

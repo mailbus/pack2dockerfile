@@ -39,6 +39,7 @@ type Process struct {
 	Type       string   `json:"type"`
 	Command    string   `json:"command"`
 	Args       []string `json:"args,omitempty"`
+	Shell      string   `json:"shell,omitempty"`
 	Direct     bool     `json:"direct"`
 	Default    bool     `json:"default"`
 	WorkingDir string   `json:"working_dir,omitempty"`
@@ -228,6 +229,7 @@ func processesFromInspect(info *packInfo) []Process {
 			Type:       p.Type,
 			Command:    p.Command,
 			Args:       p.Args,
+			Shell:      p.Shell,
 			Direct:     p.Shell == "",
 			Default:    p.Default,
 			WorkingDir: p.WorkingDir,

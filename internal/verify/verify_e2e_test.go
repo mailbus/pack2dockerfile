@@ -115,10 +115,11 @@ func TestDetectsMismatches(t *testing.T) {
 	}
 }
 
-// TestGeneratedNodeDockerfile is the M1 closed loop (ticket 03): read the
-// image, render a Dockerfile with p2df's template, rebuild it from the
-// fixture source, and require all four behavior checks to pass.
-func TestGeneratedNodeDockerfile(t *testing.T) {
+// verifyGeneratedImage is the closed loop for one language: read the image,
+// render a Dockerfile with p2df's template, rebuild from the fixture source,
+// and require all four behavior checks to pass.
+func verifyGeneratedImage(t *testing.T, fixture string) {
+	t.Helper()
 	dockerAvailable(t)
 	orig := testImage(t)
 	ctx := context.Background()
@@ -128,21 +129,32 @@ func TestGeneratedNodeDockerfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load image: %v", err)
 	}
-	nodeVersion, err := imageinfo.NodeEngineVersion(ctx, runner, orig)
+	if len(img.Languages) != 1 {
+		t.Fatalf("languages = %v, want exactly one", img.Languages)
+	}
+	var runtimeVersion string
+	switch img.Languages[0] {
+	case "node":
+		runtimeVersion, err = imageinfo.NodeEngineVersion(ctx, runner, orig)
+	case "python":
+		runtimeVersion, err = imageinfo.CPythonVersion(ctx, runner, orig)
+	default:
+		t.Fatalf("no template for language %q", img.Languages[0])
+	}
 	if err != nil {
-		t.Fatalf("node version: %v", err)
+		t.Fatalf("runtime version: %v", err)
 	}
 	launchEnv, err := dockerfile.ReadLaunchEnv(ctx, runner, orig)
 	if err != nil {
 		t.Fatalf("read launch env: %v", err)
 	}
-	rendered, err := dockerfile.Render(dockerfile.Input{Image: img, NodeVersion: nodeVersion, LaunchEnv: launchEnv})
+	rendered, err := dockerfile.Render(dockerfile.Input{Image: img, RuntimeVersion: runtimeVersion, LaunchEnv: launchEnv})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
 	t.Logf("generated Dockerfile:\n%s", rendered)
 
-	fixture, err := filepath.Abs(filepath.Join("..", "..", "fixtures", "node-hello"))
+	fixtureDir, err := filepath.Abs(filepath.Join("..", "..", "fixtures", fixture))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +162,7 @@ func TestGeneratedNodeDockerfile(t *testing.T) {
 	res, err := Run(ctx, Options{
 		Original:   orig,
 		Dockerfile: df,
-		ContextDir: fixture,
+		ContextDir: fixtureDir,
 		Tag:        "p2df-verify-generated",
 		Timeout:    60 * time.Second,
 	})
@@ -161,4 +173,14 @@ func TestGeneratedNodeDockerfile(t *testing.T) {
 	if !res.Passed() {
 		t.Fatalf("generated Dockerfile should pass the four checks")
 	}
+}
+
+// M1 closed loop (ticket 03).
+func TestGeneratedNodeDockerfile(t *testing.T) {
+	verifyGeneratedImage(t, "node-hello")
+}
+
+// M2 closed loop (ticket 04).
+func TestGeneratedPythonDockerfile(t *testing.T) {
+	verifyGeneratedImage(t, "python-hello")
 }

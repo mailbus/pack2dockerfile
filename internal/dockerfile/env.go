@@ -32,12 +32,15 @@ func ReadLaunchEnv(ctx context.Context, r imageinfo.Runner, image string) ([]Env
 	return parseLaunchEnv(string(out)), nil
 }
 
-// parseLaunchEnv understands the CNB env.launch file suffixes: .default and
-// .override carry literal values; .append/.prepend/.delim modify an existing
-// variable and are not reconstructed (they only affect PATH-like vars today).
+// parseLaunchEnv understands the CNB env file suffixes. .default/.override
+// set the value, .prepend/.append extend it, .delim overrides the separator
+// (":" by default). This mirrors what the launcher does at runtime.
 func parseLaunchEnv(raw string) []Env {
-	defaults := map[string]string{}
-	overrides := map[string]string{}
+	type entry struct {
+		def, override, delim string
+		prepends, appends    []string
+	}
+	entries := map[string]*entry{}
 	var path, value string
 	flush := func() {
 		if path == "" {
@@ -45,17 +48,28 @@ func parseLaunchEnv(raw string) []Env {
 		}
 		base := path[strings.LastIndex(path, "/")+1:]
 		name, kind, ok := strings.Cut(base, ".")
-		if !ok {
+		if !ok || isNoiseEnv(name) {
 			return
 		}
-		if isNoiseEnv(name) {
-			return
+		e := entries[name]
+		if e == nil {
+			e = &entry{delim: ":"}
+			entries[name] = e
 		}
+		v := strings.TrimRight(value, "\r\n")
 		switch kind {
 		case "default":
-			defaults[name] = strings.TrimRight(value, "\r\n")
+			e.def = v
 		case "override":
-			overrides[name] = strings.TrimRight(value, "\r\n")
+			e.override = v
+		case "prepend":
+			e.prepends = append(e.prepends, v)
+		case "append":
+			e.appends = append(e.appends, v)
+		case "delim":
+			if v != "" {
+				e.delim = v
+			}
 		}
 	}
 	for _, line := range strings.Split(raw, "\n") {
@@ -73,17 +87,19 @@ func parseLaunchEnv(raw string) []Env {
 	}
 	flush()
 
-	values := map[string]string{}
-	for k, v := range defaults {
-		values[k] = v
-	}
-	for k, v := range overrides {
-		values[k] = v
-	}
-
-	out := make([]Env, 0, len(values))
-	for k, v := range values {
-		out = append(out, Env{Key: k, Value: v})
+	out := make([]Env, 0, len(entries))
+	for name, e := range entries {
+		v := e.def
+		if e.override != "" {
+			v = e.override
+		}
+		for _, p := range e.prepends {
+			v = p + e.delim + v
+		}
+		for _, a := range e.appends {
+			v += e.delim + a
+		}
+		out = append(out, Env{Key: name, Value: v})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out

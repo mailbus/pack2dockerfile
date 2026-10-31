@@ -225,9 +225,19 @@ func generatedCommandLine(cfg config, origCmd string) string {
 		if strings.HasPrefix(cfg.Entrypoint[0], "/cnb/process/") || filepath.Base(cfg.Entrypoint[0]) == "launcher" {
 			return origCmd
 		}
+		// CNB shell-form processes are recorded as a single command string;
+		// generated images mirror them as ["/bin/<shell>","-c",command].
+		if len(cfg.Entrypoint) >= 3 && cfg.Entrypoint[1] == "-c" && isShell(cfg.Entrypoint[0]) {
+			return strings.Join(cfg.Entrypoint[2:], " ")
+		}
 		return strings.Join(append(append([]string{}, cfg.Entrypoint...), cfg.Cmd...), " ")
 	}
 	return strings.Join(cfg.Cmd, " ")
+}
+
+func isShell(path string) bool {
+	base := filepath.Base(path)
+	return base == "sh" || base == "bash"
 }
 
 func runUID(ctx context.Context, image string) (string, error) {
@@ -327,11 +337,14 @@ var noiseExact = map[string]bool{
 	"_":                 true,
 	"MEMORY_AVAILABLE":  true, // node-engine exec.d
 	"JAVA_TOOL_OPTIONS": true, // Java memory calculator exec.d
-	// Layout-derived paths (spec v4): the original points into /layers, the
-	// generated image installs Node at /usr/local. NODE_HOME is translated in
-	// the Dockerfile; the literal value still differs by design.
-	"NODE_HOME":       true,
-	"LD_LIBRARY_PATH": true,
+	// Layout-derived paths (spec v4/v5): the original points into /layers, the
+	// generated image installs the runtime at /usr/local. The Dockerfile
+	// translates these values; the literal value still differs by design.
+	"NODE_HOME":           true,
+	"LD_LIBRARY_PATH":     true,
+	"PYTHONPATH":          true,
+	"PYTHONPYCACHEPREFIX": true, // cpython exec.d
+	"OLDPWD":              true, // shell artifact, same class as PWD
 }
 
 var noisePrefixes = []string{"LC_", "CNB_", "BP_", "BPL_"}
