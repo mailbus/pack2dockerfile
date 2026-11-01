@@ -1,5 +1,5 @@
 // Package dockerfile renders a CNB image model back into a human-readable,
-// rebuildable Dockerfile (spec: 真·语义反推, MVP1 Node/Python).
+// rebuildable Dockerfile (spec: 真·语义反推, MVP1 Node/Python/Go/Java).
 package dockerfile
 
 import (
@@ -45,6 +45,8 @@ type runtime struct {
 	NormalizeCommand func(string) string
 	// PathPrepend puts the workdir on PATH so a bare binary name resolves.
 	PathPrepend bool
+	// ExtraPath is prepended to PATH (e.g. the copied JDK's bin directory).
+	ExtraPath string
 }
 
 func runtimeFor(language, version string, proc *imageinfo.Process) (runtime, error) {
@@ -92,6 +94,29 @@ func runtimeFor(language, version string, proc *imageinfo.Process) (runtime, err
 			},
 			PathPrepend: true,
 		}, nil
+	case "java":
+		return runtime{
+			Language:   "java",
+			BuildImage: "maven:3.9-eclipse-temurin-" + javaMajor(version) + "-jammy",
+			// Paketo's executable-jar buildpack explodes the jar into /workspace
+			// and launches "java <main-class>" with CLASSPATH=/workspace, so the
+			// generated image mirrors that layout instead of running the jar.
+			Setup: []string{"RUN mvn -B -DskipTests package && cp -r target/classes/. . && rm -rf src target pom.xml"},
+			Copy:  []string{javaHome},
+			Note: []string{
+				"The Paketo run image does not ship a JRE: the JVM lives in a",
+				"buildpack layer. The Temurin JDK from the maven build stage is",
+				"copied into the run image and used as JAVA_HOME.",
+			},
+			Translate: translateJavaPaths,
+			NormalizeCommand: func(cmd string) string {
+				if strings.HasPrefix(cmd, "/layers/") {
+					return filepath.Base(cmd)
+				}
+				return cmd
+			},
+			ExtraPath: javaHome + "/bin",
+		}, nil
 	}
 	return runtime{}, fmt.Errorf("no template for language %q yet", language)
 }
@@ -136,8 +161,15 @@ func Render(in Input) ([]byte, error) {
 	if rt.Translate != nil {
 		env = rt.Translate(env)
 	}
+	var pathEntries []string
 	if rt.PathPrepend {
-		env = append(env, Env{Key: "PATH", Value: workdir + ":$PATH"})
+		pathEntries = append(pathEntries, workdir)
+	}
+	if rt.ExtraPath != "" {
+		pathEntries = append(pathEntries, rt.ExtraPath)
+	}
+	if len(pathEntries) > 0 {
+		env = append(env, Env{Key: "PATH", Value: strings.Join(pathEntries, ":") + ":$PATH"})
 	}
 	sort.Slice(env, func(i, j int) bool { return env[i].Key < env[j].Key })
 
@@ -239,6 +271,35 @@ func majorMinor(version string) string {
 	return parts[0] + "." + parts[1]
 }
 
+// javaMajor turns "21.0.13" into "21" and "1.8.0" into "8", matching the
+// eclipse-temurin tag scheme (temurin-8, temurin-21).
+func javaMajor(version string) string {
+	parts := strings.Split(version, ".")
+	if len(parts) < 1 || parts[0] == "" {
+		return version
+	}
+	if parts[0] == "1" && len(parts) > 1 {
+		return parts[1]
+	}
+	return parts[0]
+}
+
+// javaHome is where the official maven/temurin images install the JDK and
+// where the generated run image puts it.
+const javaHome = "/opt/java/openjdk"
+
+// javaJrePath matches the Bellsoft Liberica JRE layer path in launch env.
+var javaJrePath = regexp.MustCompile(`/layers/[^:]*/jre`)
+
+// translateJavaPaths points JAVA_HOME (and LD_LIBRARY_PATH) at the JDK copied
+// from the maven build stage instead of the buildpack's /layers layout.
+func translateJavaPaths(env []Env) []Env {
+	for i, e := range env {
+		env[i].Value = javaJrePath.ReplaceAllString(e.Value, javaHome)
+	}
+	return env
+}
+
 type processLine struct {
 	Type    string
 	Command string
@@ -248,6 +309,7 @@ type processLine struct {
 
 func processLines(img *imageinfo.Image) []processLine {
 	out := make([]processLine, 0, len(img.Processes))
+	seenExample := map[string]bool{}
 	for _, p := range img.Processes {
 		cmd := p.Command
 		if strings.HasPrefix(cmd, "/layers/") {
@@ -266,6 +328,13 @@ func processLines(img *imageinfo.Image) []processLine {
 				shell = "bash"
 			}
 			example = "docker run --rm -it --entrypoint /bin/" + shell + " " + img.Name + " -c \"" + strings.Join(argv, " ") + "\""
+		}
+		// Java exposes web/task/executable-jar with the same command; list each
+		// process in the table but print its run example only once.
+		if seenExample[example] {
+			example = ""
+		} else {
+			seenExample[example] = true
 		}
 		out = append(out, processLine{
 			Type:    p.Type,
@@ -297,7 +366,9 @@ var tpl = template.Must(template.New("dockerfile").Funcs(template.FuncMap{"q": q
 #
 # Run another process (this Dockerfile only restores the default one):
 {{- range .Processes}}
+{{- if .Example}}
 #   {{.Example}}
+{{- end}}
 {{- end}}
 #
 {{- range .Runtime.Note}}

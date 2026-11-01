@@ -147,6 +147,70 @@ func TestRenderGo(t *testing.T) {
 	}
 }
 
+func TestRenderJava(t *testing.T) {
+	img := &imageinfo.Image{
+		Name:       "java-hello:latest",
+		ImageID:    "sha256:jav456",
+		Stack:      "io.buildpacks.stacks.jammy",
+		RunImage:   "paketobuildpacks/run-jammy-full:latest",
+		User:       "1002:1000",
+		WorkingDir: "/workspace",
+		Buildpacks: []imageinfo.Buildpack{{ID: "paketo-buildpacks/bellsoft-liberica", Version: "11.10.4"}},
+		Processes: []imageinfo.Process{
+			{Type: "web", Command: "java", Args: []string{"hello.Main"}, Direct: true, Default: true, WorkingDir: "/workspace"},
+			{Type: "task", Command: "java", Args: []string{"hello.Main"}, Direct: true, WorkingDir: "/workspace"},
+			{Type: "executable-jar", Command: "java", Args: []string{"hello.Main"}, Direct: true, WorkingDir: "/workspace"},
+		},
+		Languages:      []string{"java"},
+		DefaultProcess: nil,
+	}
+	img.DefaultProcess = &img.Processes[0]
+	out, err := Render(Input{
+		Image:          img,
+		RuntimeVersion: "21.0.13",
+		LaunchEnv: []Env{
+			{Key: "CLASSPATH", Value: "/workspace"},
+			{Key: "JAVA_HOME", Value: "/layers/paketo-buildpacks_bellsoft-liberica/jre"},
+			{Key: "LD_LIBRARY_PATH", Value: "/layers/paketo-buildpacks_bellsoft-liberica/jre/lib"},
+			{Key: "MALLOC_ARENA_MAX", Value: "2"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		"FROM maven:3.9-eclipse-temurin-21-jammy AS build",
+		"RUN mvn -B -DskipTests package && cp -r target/classes/. . && rm -rf src target pom.xml",
+		"COPY --from=build /opt/java/openjdk /opt/java/openjdk",
+		"ENV CLASSPATH=\"/workspace\"",
+		"ENV JAVA_HOME=\"/opt/java/openjdk\"",
+		"ENV LD_LIBRARY_PATH=\"/opt/java/openjdk/lib\"",
+		"ENV MALLOC_ARENA_MAX=\"2\"",
+		"ENV PATH=\"/opt/java/openjdk/bin:$PATH\"",
+		"#   web (default): java hello.Main",
+		"#   task: java hello.Main",
+		"#   executable-jar: java hello.Main",
+		"ENTRYPOINT [\"java\",\"hello.Main\"]",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("Dockerfile missing %q\n---\n%s", want, s)
+		}
+	}
+	// Three processes share one command; the run example is printed once.
+	if n := strings.Count(s, "#   docker run --rm -it --entrypoint java "); n != 1 {
+		t.Errorf("run example printed %d times, want 1\n---\n%s", n, s)
+	}
+}
+
+func TestJavaMajor(t *testing.T) {
+	for in, want := range map[string]string{"21.0.13": "21", "1.8.0": "8", "17": "17"} {
+		if got := javaMajor(in); got != want {
+			t.Errorf("javaMajor(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestRenderRejectsUnknownLanguage(t *testing.T) {
 	img := sampleImage()
 	img.Languages = []string{"ruby"}
@@ -191,9 +255,23 @@ func TestParseLaunchEnv(t *testing.T) {
 		"/layers/paketo-buildpacks_cpython/cpython",
 		"@@FILE /layers/paketo-buildpacks_pip-install/packages/env/PYTHONPATH.prepend",
 		"/layers/paketo-buildpacks_pip-install/packages/lib/python3.11/site-packages",
+		"@@FILE /layers/paketo-buildpacks_executable-jar/classpath/env/CLASSPATH.delim",
+		":",
+		"@@FILE /layers/paketo-buildpacks_executable-jar/classpath/env/CLASSPATH.prepend",
+		"/workspace",
+		"@@FILE /layers/paketo-buildpacks_bellsoft-liberica/jre/env.launch/MALLOC_ARENA_MAX.default",
+		"2",
+		"@@FILE /layers/paketo-buildpacks_bellsoft-liberica/jre/env.launch/BPI_JVM_CACERTS.default",
+		"/layers/paketo-buildpacks_bellsoft-liberica/jre/lib/security/cacerts",
+		"@@FILE /layers/paketo-buildpacks_bellsoft-liberica/java-security-properties/env.launch/JAVA_SECURITY_PROPERTIES.default",
+		"/layers/paketo-buildpacks_bellsoft-liberica/java-security-properties/java-security.properties",
+		"@@FILE /layers/paketo-buildpacks_bellsoft-liberica/helper/exec.d/nmt/NMT_LEVEL_1",
+		"summary",
 	}, "\n")
 	got := parseLaunchEnv(raw)
 	want := []Env{
+		{Key: "CLASSPATH", Value: "/workspace"},
+		{Key: "MALLOC_ARENA_MAX", Value: "2"},
 		{Key: "NODE_PROJECT_PATH", Value: "/app"},
 		{Key: "NPM_CONFIG_LOGLEVEL", Value: "error"},
 		{Key: "PYTHONPATH", Value: "/layers/paketo-buildpacks_pip-install/packages/lib/python3.11/site-packages:/layers/paketo-buildpacks_cpython/cpython"},

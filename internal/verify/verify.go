@@ -340,26 +340,29 @@ func parseEnv(raw string) map[string]string {
 // Noise that legitimately differs between a CNB image and a generated one:
 // infrastructure vars and exec.d-computed dynamic vars (see spec 已知限制).
 var noiseExact = map[string]bool{
-	"PATH":              true,
-	"HOME":              true,
-	"HOSTNAME":          true,
-	"LANG":              true,
-	"PWD":               true,
-	"SHLVL":             true,
-	"_":                 true,
-	"MEMORY_AVAILABLE":  true, // node-engine exec.d
-	"JAVA_TOOL_OPTIONS": true, // Java memory calculator exec.d
-	// Layout-derived paths (spec v4/v5): the original points into /layers, the
-	// generated image installs the runtime at /usr/local. The Dockerfile
-	// translates these values; the literal value still differs by design.
+	"PATH":                     true,
+	"HOME":                     true,
+	"HOSTNAME":                 true,
+	"LANG":                     true,
+	"PWD":                      true,
+	"SHLVL":                    true,
+	"_":                        true,
+	"MEMORY_AVAILABLE":         true, // node-engine exec.d
+	"JAVA_TOOL_OPTIONS":        true, // Java memory calculator exec.d
+	"JAVA_SECURITY_PROPERTIES": true, // bellsoft-liberica internal properties file
+	// Layout-derived paths (spec v4/v5/v7): the original points into /layers,
+	// the generated image installs the runtime at a stable prefix (/usr/local
+	// for Node/Python, /opt/java/openjdk for Java). The Dockerfile translates
+	// these values; the literal value still differs by design.
 	"NODE_HOME":           true,
+	"JAVA_HOME":           true,
 	"LD_LIBRARY_PATH":     true,
 	"PYTHONPATH":          true,
 	"PYTHONPYCACHEPREFIX": true, // cpython exec.d
 	"OLDPWD":              true, // shell artifact, same class as PWD
 }
 
-var noisePrefixes = []string{"LC_", "CNB_", "BP_", "BPL_"}
+var noisePrefixes = []string{"LC_", "CNB_", "BP_", "BPL_", "BPI_", "NMT_LEVEL_"}
 
 func isNoise(key string) bool {
 	if noiseExact[key] {

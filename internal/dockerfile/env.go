@@ -93,11 +93,21 @@ func parseLaunchEnv(raw string) []Env {
 		if e.override != "" {
 			v = e.override
 		}
+		// The launcher does not leave an empty segment when the base value is
+		// unset (observed with CLASSPATH: prepend /workspace -> "/workspace").
 		for _, p := range e.prepends {
-			v = p + e.delim + v
+			if v == "" {
+				v = p
+			} else {
+				v = p + e.delim + v
+			}
 		}
 		for _, a := range e.appends {
-			v += e.delim + a
+			if v == "" {
+				v = a
+			} else {
+				v += e.delim + a
+			}
 		}
 		out = append(out, Env{Key: name, Value: v})
 	}
@@ -110,10 +120,10 @@ func parseLaunchEnv(raw string) []Env {
 func isNoiseEnv(key string) bool {
 	switch key {
 	case "PATH", "HOME", "HOSTNAME", "LANG", "PWD", "SHLVL", "_",
-		"MEMORY_AVAILABLE", "JAVA_TOOL_OPTIONS":
+		"MEMORY_AVAILABLE", "JAVA_TOOL_OPTIONS", "JAVA_SECURITY_PROPERTIES":
 		return true
 	}
-	for _, p := range []string{"LC_", "CNB_", "BP_", "BPL_"} {
+	for _, p := range []string{"LC_", "CNB_", "BP_", "BPL_", "BPI_", "NMT_LEVEL_"} {
 		if strings.HasPrefix(key, p) {
 			return true
 		}

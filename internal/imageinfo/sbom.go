@@ -24,6 +24,16 @@ func CPythonVersion(ctx context.Context, r Runner, image string) (string, error)
 	return runtimeVersion(ctx, r, image, "CPython", "Python")
 }
 
+// JavaVersion returns the JVM version from the image SBOM. Paketo records the
+// Bellsoft Liberica runtime as "BellSoft Liberica JRE" (or JDK for non-default
+// BP_JVM_TYPE).
+func JavaVersion(ctx context.Context, r Runner, image string) (string, error) {
+	return runtimeVersion(ctx, r, image,
+		"BellSoft Liberica JRE", "Bellsoft Liberica JRE", "Liberica JRE",
+		"BellSoft Liberica JDK", "Bellsoft Liberica JDK", "Liberica JDK",
+	)
+}
+
 // GoVersion returns the Go toolchain version from the image SBOM. Paketo does
 // not ship a launch-layer Go SBOM; the version is embedded in the compiled
 // binary SBOM as the stdlib component (version "go1.27.3", cpe golang:go).
@@ -170,6 +180,7 @@ func versionFromLegacy(path string, names []string) string {
 	var doc []struct {
 		Name     string `json:"name"`
 		Metadata struct {
+			Name    string `json:"name"`
 			Version string `json:"version"`
 		} `json:"metadata"`
 	}
@@ -182,7 +193,9 @@ func versionFromLegacy(path string, names []string) string {
 			continue
 		}
 		for _, n := range names {
-			if c.Name == n {
+			// The top-level name is the layer name; the display name (e.g.
+			// "BellSoft Liberica JRE" for layer "jre") is under metadata.
+			if c.Name == n || c.Metadata.Name == n {
 				return c.Metadata.Version
 			}
 		}
